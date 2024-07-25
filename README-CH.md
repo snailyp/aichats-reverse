@@ -57,6 +57,158 @@ docker run -p 8001:8001 -e APP_SECRET=你的密钥 ai-chat-api
 
 [![使用 Vercel 部署](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/snailyp/aichats-reverse)
 
+## Cloudflare Workers
+
+```js
+const BASE_URL = "https://ai-chats.org";
+const APP_SECRET = "sk-123456"; // 在实际使用时，请使用更安全的方式存储和访问密钥
+const ALLOWED_MODELS = ["gpt-4o", "gpt-4o-2024-05-13"];
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request))
+})
+async function handleRequest(request) {
+  if (request.method === "OPTIONS") {
+    return handleCORS();
+  }
+  if (request.method === "POST" && new URL(request.url).pathname === "/v1/chat/completions") {
+    return handleChatCompletions(request);
+  }
+  return new Response("Not Found", { status: 404 });
+}
+function handleCORS() {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    },
+  });
+}
+async function handleChatCompletions(request) {
+  const authHeader = request.headers.get("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ") || authHeader.split(" ")[1] !== APP_SECRET) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+  const requestData = await request.json();
+  if (!ALLOWED_MODELS.includes(requestData.model)) {
+    return new Response(`Model ${requestData.model} is not allowed. Allowed models are: ${ALLOWED_MODELS.join(", ")}`, { status: 400 });
+  }
+  const jsonData = {
+    type: 'chat',
+    messagesHistory: requestData.messages.map(msg => ({
+      from: msg.role === 'user' ? 'you' : 'chatGPT',
+      content: msg.content
+    })),
+  };
+  const aiChatsResponse = await fetch(`${BASE_URL}/chat/send2/`, {
+    method: 'POST',
+    headers: {
+      'accept': 'application/json, text/event-stream',
+      'accept-language': 'zh-CN,zh;q=0.9',
+      'content-type': 'application/json',
+      'origin': BASE_URL,
+      'referer': `${BASE_URL}/chat/`,
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    },
+    body: JSON.stringify(jsonData),
+  });
+  if (!aiChatsResponse.ok) {
+    return new Response(`Error communicating with AI-Chats: ${aiChatsResponse.statusText}`, { status: 500 });
+  }
+  if (requestData.stream) {
+    return handleStreamResponse(aiChatsResponse, requestData.model);
+  } else {
+    return handleNonStreamResponse(aiChatsResponse, requestData.model);
+  }
+}
+function handleStreamResponse(response, model) {
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+  const reader = response.body.getReader();
+  readStream(reader, writer, encoder, model);
+  return new Response(readable, {
+    headers: { 'Content-Type': 'text/event-stream' },
+  });
+}
+async function readStream(reader, writer, encoder, model) {
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const text = new TextDecoder().decode(value);
+      const lines = text.split('\n');
+      
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const content = line.slice(6).replace(' trylimit', '').replace(/\\n/g, '\n');
+          const simulatedData = simulateData(content, model);
+          await writer.write(encoder.encode(`data: ${JSON.stringify(simulatedData)}\n\n`));
+        }
+      }
+    }
+    await writer.write(encoder.encode("data: [DONE]\n\n"));
+  } catch (error) {
+    console.error('Stream reading error:', error);
+  } finally {
+    await writer.close();
+  }
+}
+async function handleNonStreamResponse(response, model) {
+  let fullResponse = "";
+  const reader = response.body.getReader();
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    fullResponse += new TextDecoder().decode(value);
+  }
+  fullResponse = fullResponse.replace(/^data: /gm, '').replace(/ trylimit/g, '').replace(/\\n/g, '\n');
+  const responseData = {
+    id: `chatcmpl-${crypto.randomUUID()}`,
+    object: "chat.completion",
+    created: Date.now(),
+    model: model,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: fullResponse
+        },
+        finish_reason: "stop"
+      }
+    ],
+    usage: null
+  };
+  return new Response(JSON.stringify(responseData), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+function simulateData(content, model) {
+  return {
+    id: `chatcmpl-${crypto.randomUUID()}`,
+    object: "chat.completion.chunk",
+    created: Date.now(),
+    model: model,
+    choices: [
+      {
+        index: 0,
+        delta: {
+          content: content,
+          role: "assistant"
+        },
+        finish_reason: null
+      }
+    ],
+    usage: null
+  };
+}
+
+```
+
 ## 使用方法
 
 向 `/v1/chat/completions` 发送 POST 请求，请求体中包含聊天消息和模型规格的 JSON。在 Authorization 头中包含你的 APP_SECRET。
