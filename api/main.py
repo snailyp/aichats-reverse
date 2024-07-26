@@ -105,13 +105,12 @@ async def chat_completions(request: ChatRequest, app_secret: str = Depends(verif
     # 使用 OpenAI API
     json_data = {
         'type': 'chat',
-        'messagesHistory': [
-            {
-                'from': 'you' if msg.role == 'user' else 'chatGPT',
-                'content': msg.content
-            } for msg in request.messages
-        ],
+        'messagesHistory': [{
+            'from': 'you',
+            'content': '\n'.join([f"{'User' if msg.role == 'user' else 'Assistant'}: {msg.content}" for msg in request.messages])
+        }],
     }
+
     try:
         response = requests.post(f'{BASE_URL}/chat/send2/', headers=headers, json=json_data, stream=True)
         response.raise_for_status()
@@ -162,4 +161,4 @@ async def chat_completions(request: ChatRequest, app_secret: str = Depends(verif
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8002)
