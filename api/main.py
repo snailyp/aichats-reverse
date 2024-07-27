@@ -70,6 +70,26 @@ def simulate_data(content, model):
         ],
         "usage": None
     }
+    
+    
+def stop_data(content, model):
+    return {
+        "id": f"chatcmpl-{uuid.uuid4()}",
+        "object": "chat.completion.chunk",
+        "created": int(datetime.now().timestamp()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": content,
+                    "role": "assistant"
+                },
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": None
+    }
 
 
 def verify_app_secret(credentials: HTTPAuthorizationCredentials = Depends(security)):
